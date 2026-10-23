@@ -22,9 +22,12 @@ from __future__ import annotations
 
 import argparse
 import csv
+import html
 import json
 import os
+import re
 import urllib.error
+import urllib.parse
 import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
@@ -39,18 +42,52 @@ def _required(name):
     return value
 
 
-def _send_json(url, payload, headers=None):
+def _request_json(url, payload=None, headers=None, method=None):
     request = urllib.request.Request(
         url,
-        data=json.dumps(payload).encode("utf-8"),
+        data=None if payload is None else json.dumps(payload).encode("utf-8"),
         headers={"Content-Type": "application/json", **(headers or {})},
+        method=method,
     )
     try:
         with urllib.request.urlopen(request, timeout=30) as response:
-            response.read()
+            body = response.read()
     except urllib.error.HTTPError as exc:
         detail = exc.read().decode("utf-8", "replace")
         raise RuntimeError(f"{url} returned {exc.code}: {detail}") from exc
+    return json.loads(body) if body else {}
+
+
+def _send_json(url, payload, headers=None):
+    _request_json(url, payload=payload, headers=headers, method="POST")
+
+
+def _hypothesis_api_url():
+    return os.environ.get("HYPOTHESIS_API_URL", "").strip().rstrip("/") or "https://api.hypothes.is"
+
+
+def _hypothesis_headers():
+    return {"Authorization": f"Bearer {_required('HYPOTHESIS_API_TOKEN')}"}
+
+
+def _page_title(link):
+    """Return the <title> of the page at link, or "" if it can't be read.
+
+    The API displays the *document's* title next to an annotation, not the
+    annotation text, so a page that has never been visited by the client shows
+    up as "Untitled" unless the title is sent with the annotation.
+    """
+    request = urllib.request.Request(link, headers={"User-Agent": "h-daily-post"})
+    try:
+        with urllib.request.urlopen(request, timeout=15) as response:
+            head = response.read(200_000).decode("utf-8", "replace")
+    except Exception:  # noqa: BLE001 - any fetch failure just means "no title"
+        return ""
+
+    match = re.search(r"<title[^>]*>(.*?)</title>", head, re.IGNORECASE | re.DOTALL)
+    if not match:
+        return ""
+    return " ".join(html.unescape(match.group(1)).split())
 
 
 def _message(link, description):
@@ -59,17 +96,18 @@ def _message(link, description):
 
 def post_hypothesis(link, description):
     # A page note: the annotation's uri is the link itself, so the description
-    # becomes the note body rather than a second copy of the URL.
-    api_url = os.environ.get("HYPOTHESIS_API_URL", "").strip().rstrip("/") or "https://api.hypothes.is"
+    # becomes the note body rather than a second copy of the URL. The document
+    # title is what the client shows above the annotation, so always send one.
     payload = {"uri": link, "text": description or link}
+    title = _page_title(link) or description
+    if title:
+        payload["document"] = {"title": [title]}
     # Without a group the API files the annotation in the public __world__ group.
     group = os.environ.get("HYPOTHESIS_GROUP_ID", "").strip()
     if group:
         payload["group"] = group
     _send_json(
-        f"{api_url}/api/annotations",
-        payload,
-        headers={"Authorization": f"Bearer {_required('HYPOTHESIS_API_TOKEN')}"},
+        f"{_hypothesis_api_url()}/api/annotations", payload, headers=_hypothesis_headers()
     )
 
 
@@ -141,14 +179,71 @@ def write_queue(path, fieldnames, rows):
         writer.writerows(rows)
 
 
+def repair_titles(rows, dry_run=False):
+    """Give the annotations of already-posted rows a document title.
+
+    An annotation created without document metadata leaves its page showing up
+    as "Untitled" until something claims a title for that URI, so rows that went
+    out before titles were sent need an update.
+    """
+    api_url = _hypothesis_api_url()
+    headers = _hypothesis_headers()
+    userid = _request_json(f"{api_url}/api/profile", headers=headers)["userid"]
+
+    repaired = 0
+    for row in rows:
+        link = (row.get("link") or "").strip()
+        if not link or not (row.get("posted_at") or "").strip():
+            continue
+
+        title = _page_title(link) or (row.get("description") or "").strip()
+        if not title:
+            print(f"No title available for {link}, skipping.")
+            continue
+
+        query = urllib.parse.urlencode({"uri": link, "user": userid, "limit": 50})
+        found = _request_json(f"{api_url}/api/search?{query}", headers=headers).get("rows", [])
+        if not found:
+            print(f"No annotation of ours on {link}, skipping.")
+            continue
+
+        for annotation in found:
+            if dry_run:
+                print(f"[dry-run] Would title annotation {annotation['id']} on {link}: {title!r}")
+                continue
+            _request_json(
+                f"{api_url}/api/annotations/{annotation['id']}",
+                payload={"document": {"title": [title]}},
+                headers=headers,
+                method="PATCH",
+            )
+            repaired += 1
+            print(f"Titled annotation {annotation['id']} on {link}: {title!r}")
+
+    if not dry_run:
+        print(f"Retitled {repaired} annotation(s).")
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--csv", type=Path, default=Path("data/posts.csv"))
     parser.add_argument("--limit", type=int, default=1, help="maximum rows to post (default: 1)")
     parser.add_argument("--dry-run", action="store_true", help="print the next row without posting")
+    parser.add_argument(
+        "--repair-titles",
+        action="store_true",
+        help="title the annotations of rows that are already marked posted",
+    )
     args = parser.parse_args()
 
     fieldnames, rows = read_queue(args.csv)
+
+    if args.repair_titles:
+        try:
+            repair_titles(rows, dry_run=args.dry_run)
+        except RuntimeError as exc:
+            raise SystemExit(f"error: {exc}") from exc
+        return
 
     # One post per UTC day, whatever triggered this run.
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")

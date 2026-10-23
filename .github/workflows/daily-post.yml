@@ -9,6 +9,10 @@ on:
         description: Print the next row without posting it
         type: boolean
         default: false
+      repair_titles:
+        description: Title the annotations of links that are already posted
+        type: boolean
+        default: false
 permissions:
   contents: write
 # Never let two runs publish the same row at once.
@@ -25,7 +29,14 @@ jobs:
       uses: actions/setup-python@v5
       with:
         python-version: '3.11'
+    - name: Title the annotations of links already posted
+      if: inputs.repair_titles
+      env:
+        HYPOTHESIS_API_TOKEN: ${{ secrets.HYPOTHESIS_API_TOKEN }}
+        HYPOTHESIS_API_URL: ${{ vars.HYPOTHESIS_API_URL }}
+      run: python .github/scripts/post_links.py --csv data/posts.csv --repair-titles ${{ inputs.dry_run && '--dry-run' || '' }}
     - name: Post one row from data/posts.csv
+      if: ${{ !inputs.repair_titles }}
       env:
         POST_TARGET: ${{ vars.POST_TARGET || 'hypothesis' }}
         HYPOTHESIS_API_TOKEN: ${{ secrets.HYPOTHESIS_API_TOKEN }}
