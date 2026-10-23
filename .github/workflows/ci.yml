@@ -30,13 +30,13 @@ jobs:
   Format:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
       - name: Install Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5
         with:
           python-version: '3.11'
       - name: Cache the .tox dir
-        uses: actions/cache@v3
+        uses: actions/cache@v4
         with:
           path: .tox
           key: format-${{ runner.os }}-tox-${{ hashFiles('tox.ini') }}-${{ hashFiles('requirements/*') }}
@@ -47,13 +47,13 @@ jobs:
   Lint:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
       - name: Install Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5
         with:
           python-version: '3.11'
       - name: Cache the .tox dir
-        uses: actions/cache@v3
+        uses: actions/cache@v4
         with:
           path: .tox
           key: lint-${{ runner.os }}-tox-${{ hashFiles('tox.ini') }}-${{ hashFiles('requirements/*') }}
@@ -64,13 +64,13 @@ jobs:
   Typecheck:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
       - name: Install Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5
         with:
           python-version: '3.11'
       - name: Cache the .tox dir
-        uses: actions/cache@v3
+        uses: actions/cache@v4
         with:
           path: .tox
           key: typecheck-${{ runner.os }}-tox-${{ hashFiles('tox.ini') }}-${{ hashFiles('requirements/*') }}
@@ -79,7 +79,9 @@ jobs:
       - run: python -m pip install 'tox<4'
       - run: tox -e typecheck
   Tests:
-    runs-on: ubuntu-latest-32-cores
+    # ubuntu-latest-32-cores is a paid larger runner that only the upstream org
+    # has access to, so it would queue forever on a fork.
+    runs-on: ubuntu-latest
     services:
       postgres:
         image: postgres:15.10-alpine
@@ -99,13 +101,13 @@ jobs:
         env:
           discovery.type: single-node
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
       - name: Install Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5
         with:
           python-version: '3.11'
       - name: Cache the .tox dir
-        uses: actions/cache@v3
+        uses: actions/cache@v4
         with:
           path: .tox
           key: tests-${{ runner.os }}-tox-${{ hashFiles('tox.ini') }}-${{ hashFiles('requirements/*') }}
@@ -117,25 +119,23 @@ jobs:
       - run: yarn build
       - run: python -m pip install 'tox<4'
       - run: tox -e tests
-        env:
-          COVERAGE_FILE: .coverage.${{ matrix.python-version }}
       - name: Upload coverage file
         uses: actions/upload-artifact@v4
         with:
-          name: coverage-python${{ matrix.python-version}}
+          name: coverage-python311
           path: .coverage.*
           include-hidden-files: true
   Coverage:
-    needs: tests
+    needs: Tests
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
       - name: Install Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5
         with:
           python-version: '3.11'
       - name: Cache the .tox dir
-        uses: actions/cache@v3
+        uses: actions/cache@v4
         with:
           path: .tox
           key: coverage-${{ runner.os }}-tox-${{ hashFiles('tox.ini') }}-${{ hashFiles('requirements/*') }}
@@ -173,13 +173,13 @@ jobs:
         ports:
         - 5672:5672
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
       - name: Install Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5
         with:
           python-version: '3.11'
       - name: Cache the .tox dir
-        uses: actions/cache@v3
+        uses: actions/cache@v4
         with:
           path: .tox
           key: functests-${{ runner.os }}-tox-${{ hashFiles('tox.ini') }}-${{ hashFiles('requirements/*') }}

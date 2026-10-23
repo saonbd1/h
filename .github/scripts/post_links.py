@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Publish the next unposted row of a CSV queue to a chat or webhook target.
+"""Publish the next unposted row of a CSV queue as a Hypothesis annotation.
 
 The CSV is the queue: each row is a link plus a description and a ``posted_at``
 column that records when the row went out. Rows are published in file order,
@@ -8,12 +8,14 @@ so adding a row to the bottom of the file means "post this one next".
 At most one row is published per UTC day: a manual run, a retried job or a
 re-run after a failed commit is a no-op once that day's post went out.
 
-The destination is selected with ``POST_TARGET`` (default: ``discord``):
+The destination is selected with ``POST_TARGET`` (default: ``hypothesis``):
 
-    discord   DISCORD_WEBHOOK_URL
-    slack     SLACK_WEBHOOK_URL
-    telegram  TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID
-    generic   WEBHOOK_URL, receives {"link": ..., "description": ...}
+    hypothesis HYPOTHESIS_API_TOKEN, optionally HYPOTHESIS_GROUP_ID and
+               HYPOTHESIS_API_URL. Annotates the link itself.
+    discord    DISCORD_WEBHOOK_URL
+    slack      SLACK_WEBHOOK_URL
+    telegram   TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID
+    generic    WEBHOOK_URL, receives {"link": ..., "description": ...}
 """
 
 from __future__ import annotations
@@ -37,11 +39,11 @@ def _required(name):
     return value
 
 
-def _send_json(url, payload):
+def _send_json(url, payload, headers=None):
     request = urllib.request.Request(
         url,
         data=json.dumps(payload).encode("utf-8"),
-        headers={"Content-Type": "application/json"},
+        headers={"Content-Type": "application/json", **(headers or {})},
     )
     try:
         with urllib.request.urlopen(request, timeout=30) as response:
@@ -53,6 +55,22 @@ def _send_json(url, payload):
 
 def _message(link, description):
     return f"{description}\n\n{link}" if description else link
+
+
+def post_hypothesis(link, description):
+    # A page note: the annotation's uri is the link itself, so the description
+    # becomes the note body rather than a second copy of the URL.
+    api_url = os.environ.get("HYPOTHESIS_API_URL", "").strip().rstrip("/") or "https://api.hypothes.is"
+    payload = {"uri": link, "text": description or link}
+    # Without a group the API files the annotation in the public __world__ group.
+    group = os.environ.get("HYPOTHESIS_GROUP_ID", "").strip()
+    if group:
+        payload["group"] = group
+    _send_json(
+        f"{api_url}/api/annotations",
+        payload,
+        headers={"Authorization": f"Bearer {_required('HYPOTHESIS_API_TOKEN')}"},
+    )
 
 
 def post_discord(link, description):
@@ -79,6 +97,7 @@ def post_generic(link, description):
 TARGETS = {
     "discord": post_discord,
     "generic": post_generic,
+    "hypothesis": post_hypothesis,
     "slack": post_slack,
     "telegram": post_telegram,
 }
@@ -144,7 +163,7 @@ def main():
         print(f"{args.csv} has no unposted rows.")
         return
 
-    target = os.environ.get("POST_TARGET", "").strip().lower() or "discord"
+    target = os.environ.get("POST_TARGET", "").strip().lower() or "hypothesis"
     if target not in TARGETS:
         raise SystemExit(f"Unknown POST_TARGET {target!r}, expected one of: {', '.join(sorted(TARGETS))}")
     publish = TARGETS[target]
