@@ -1,0 +1,47 @@
+name: Daily post
+on:
+  schedule:
+  # 09:00 UTC every day. GitHub Actions cron is always UTC.
+  - cron: '0 9 * * *'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: Print the next row without posting it
+        type: boolean
+        default: false
+permissions:
+  contents: write
+# Never let two runs publish the same row at once.
+concurrency:
+  group: daily-post
+  cancel-in-progress: false
+jobs:
+  post:
+    name: Post the next queued link
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: Install Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+    - name: Post one row from data/posts.csv
+      env:
+        POST_TARGET: ${{ vars.POST_TARGET }}
+        DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+        SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+        TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+        TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        WEBHOOK_URL: ${{ secrets.WEBHOOK_URL }}
+      run: python .github/scripts/post_links.py --csv data/posts.csv --limit 1 ${{ inputs.dry_run && '--dry-run' || '' }}
+    - name: Commit the updated queue
+      run: |
+        if git diff --quiet -- data/posts.csv; then
+          echo "Nothing to commit."
+          exit 0
+        fi
+        git config user.name 'github-actions[bot]'
+        git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+        git add data/posts.csv
+        git commit -m 'chore: mark published link as posted'
+        git push

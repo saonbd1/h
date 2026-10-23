@@ -12,6 +12,7 @@ on:
       - 'conf/development.ini'
       - 'conf/production.ini'
       - 'conf/supervisord*.conf'
+      - 'data/posts.csv'
       - 'docs/*'
       - 'requirements/*.in'
       - 'requirements/dev.txt'
